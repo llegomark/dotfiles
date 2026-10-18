@@ -1,0 +1,11 @@
+[Unit]
+Description=Auto-commit and push the Obsidian vault on changes
+
+[Service]
+ExecStart=%h/.local/bin/obsidian-backup-watch
+Environment=PATH=%h/.local/bin:/usr/bin
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target

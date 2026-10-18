@@ -1,0 +1,22 @@
+# Name and email live in ~/.gitconfig.local (not published).
+[include]
+	path = ~/.gitconfig.local
+
+[credential "https://github.com"]
+	helper =
+	helper = !/usr/bin/gh auth git-credential
+[credential "https://gist.github.com"]
+	helper =
+	helper = !/usr/bin/gh auth git-credential
+
+# Sign commits and tags with an SSH key
+[user]
+	signingkey = ~/.ssh/id_ed25519_signing.pub
+[gpg]
+	format = ssh
+[gpg "ssh"]
+	allowedSignersFile = ~/.ssh/allowed_signers
+[commit]
+	gpgsign = true
+[tag]
+	gpgsign = true

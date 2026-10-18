@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Commit any changes in the Obsidian vault and push them to GitHub.
+set -euo pipefail
+cd "${VAULT:-$HOME/Documents/mark}"
+
+git add -A
+if ! git diff --cached --quiet; then
+  mapfile -t files < <(git diff --cached --name-only)
+  summary="${files[*]:0:3}"
+  (( ${#files[@]} > 3 )) && summary+=" (+$(( ${#files[@]} - 3 )) more)"
+  git commit -q -m "vault: ${#files[@]} file(s) $(date '+%F %H:%M')" -m "$summary"
+fi
+
+# Push whenever local is ahead, which also retries earlier failed pushes.
+if [[ -n "$(git rev-list '@{u}..HEAD' 2>/dev/null)" ]]; then
+  git push -q
+fi

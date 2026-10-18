@@ -1,0 +1,7 @@
+[Unit]
+Description=Commit and push the Obsidian vault
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/obsidian-backup
+Environment=PATH=%h/.local/bin:/usr/bin

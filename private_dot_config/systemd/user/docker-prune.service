@@ -1,0 +1,8 @@
+[Unit]
+Description=Remove unused Docker data older than 7 days
+
+[Service]
+Type=oneshot
+# Stopped containers, unused networks, dangling images and build cache
+# untouched for 7+ days. Tagged images and volumes (databases) are kept.
+ExecStart=/usr/bin/docker system prune --force --filter until=168h

@@ -1,0 +1,17 @@
+# Open new windows at a normal size instead of maximized/fullscreen.
+# Size is in terminal cells (columns x rows); adjust to taste.
+window-width = 120
+window-height = 34
+
+# To start maximized again (keeps GNOME top bar and title bar), use:
+# maximize = true
+# For true fullscreen (hides top bar; toggle with Ctrl+Enter), use:
+# fullscreen = true
+
+# Keep Ghostty running in the background after the last window closes,
+# so new windows open instantly instead of cold-starting each time.
+quit-after-last-window-closed = false
+
+# Nerd Font: adds the icons used by the starship prompt and eza.
+# Needs the ttf-jetbrains-mono-nerd package.
+font-family = "JetBrainsMono Nerd Font"

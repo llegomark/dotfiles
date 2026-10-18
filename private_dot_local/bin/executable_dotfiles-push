@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Review and publish local dotfiles commits to the PUBLIC repo.
+set -euo pipefail
+dotfiles-sync >/dev/null
+cd "$(chezmoi source-path)"
+git fetch -q origin
+
+if [[ -z "$(git rev-list '@{u}..HEAD')" ]]; then
+  echo "Nothing new to publish."; exit 0
+fi
+
+echo "== Commits to publish =="
+git log --stat --format='%n%C(yellow)%h%Creset %s' '@{u}..HEAD'
+echo
+read -rp "Show the full diff? [y/N] " a
+[[ $a == [yY]* ]] && git diff '@{u}..HEAD'
+
+echo "== Secret scan =="
+gitleaks git --redact --no-banner --log-opts='@{u}..HEAD' . || {
+  echo "Possible secret found. NOT pushed. Remove it, then rewrite the local commits before publishing." >&2
+  exit 1
+}
+
+read -rp "Publish these changes to the PUBLIC GitHub repo? [y/N] " a
+[[ $a == [yY]* ]] || { echo "Cancelled. Commits stay local."; exit 0; }
+git push -q && echo "Published."

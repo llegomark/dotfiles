@@ -1,0 +1,9 @@
+[Unit]
+Description=Hourly retry for Obsidian vault pushes
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Watch the vault and back it up once edits have been quiet for $QUIET seconds.
+VAULT="${VAULT:-$HOME/Documents/mark}"
+QUIET="${QUIET:-60}"
+events=(-e close_write -e create -e delete -e move)
+exclude='/\.git/|/\.obsidian/workspace'
+
+obsidian-backup || echo "initial backup failed, will retry" >&2
+while true; do
+  if ! inotifywait -qq -r "${events[@]}" --exclude "$exclude" "$VAULT"; then
+    sleep 10; continue
+  fi
+  # Debounce: keep waiting while changes keep coming in.
+  while inotifywait -qq -r -t "$QUIET" "${events[@]}" --exclude "$exclude" "$VAULT"; do :; done
+  obsidian-backup || echo "backup failed, will retry on next change or hourly" >&2
+done

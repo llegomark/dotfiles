@@ -1,0 +1,17 @@
+#
+# ~/.zshenv — read by every zsh (interactive or not), so PATH lives here
+#
+
+typeset -U path PATH   # drop duplicate PATH entries
+
+export PNPM_HOME="$HOME/.local/share/pnpm"
+export BUN_INSTALL="$HOME/.bun"
+
+path=(
+  "$HOME/.local/bin"
+  "$PNPM_HOME/bin"
+  "$BUN_INSTALL/bin"
+  "$HOME/.opencode/bin"
+  $path
+)
+export PATH

@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Hourly dotfiles snapshot:
+#  - public repo (chezmoi): copy live edits into the repo and commit LOCALLY only;
+#    publishing is manual with `dotfiles-push`.
+#  - private repo: collect personal/system config, commit and push automatically.
+set -uo pipefail
+PRIV="${DOTFILES_PRIVATE:-$HOME/.local/share/dotfiles-private}"
+stamp=$(date '+%F %H:%M')
+
+commit_all() {   # commit everything staged in $1, if anything changed
+  git -C "$1" add -A
+  git -C "$1" diff --cached --quiet && return 1
+  mapfile -t files < <(git -C "$1" diff --cached --name-only)
+  summary="${files[*]:0:5}"
+  (( ${#files[@]} > 5 )) && summary+=" (+$(( ${#files[@]} - 5 )) more)"
+  git -C "$1" commit -q -m "sync: ${#files[@]} file(s) $stamp" -m "$summary"
+}
+
+# --- Public: local commit only -------------------------------------------
+src=$(chezmoi source-path)
+chezmoi re-add
+commit_all "$src" && echo "public: committed locally (run dotfiles-push to publish)"
+
+# --- Private: collect, commit, push --------------------------------------
+copy() {   # copy <source> <dest relative to $PRIV>, mirroring deletions
+  local dest="$PRIV/$2"
+  if [[ -r "$1" ]]; then
+    mkdir -p "$(dirname "$dest")" && cp -p "$1" "$dest"
+  else
+    rm -f "$dest"
+  fi
+}
+
+# Personal and home-network specific files (restore into $HOME)
+copy ~/.gitconfig.local                              home/.gitconfig.local
+copy ~/.config/fastfetch/config.jsonc                home/.config/fastfetch/config.jsonc
+copy ~/.config/fastfetch/printer-info.sh             home/.config/fastfetch/printer-info.sh
+copy ~/.config/systemd/user/go2rtc.service           home/.config/systemd/user/go2rtc.service
+copy ~/.local/share/applications/cctv-live.desktop   home/.local/share/applications/cctv-live.desktop
+
+# System files (restore with sudo)
+for f in /etc/fstab /etc/pacman.conf /etc/pacman.d/openai-chatgpt.conf \
+         /etc/xdg/reflector/reflector.conf /etc/modprobe.d/rtw89.conf \
+         /etc/docker/daemon.json /etc/systemd/system/grub-btrfsd.service.d/override.conf \
+         /etc/timeshift/timeshift.json /etc/timeshift-autosnap.conf \
+         /etc/conf.d/wireless-regdom /etc/mkinitcpio.conf /etc/default/grub \
+         /etc/systemd/zram-generator.conf; do
+  copy "$f" "etc${f#/etc}"
+done
+
+# Package lists and enabled services
+mkdir -p "$PRIV/packages" "$PRIV/services" "$PRIV/gnome" "$PRIV/network"
+pacman -Qqen > "$PRIV/packages/pacman.txt"
+pacman -Qqem > "$PRIV/packages/aur.txt"
+ls ~/.local/lib/node_modules 2>/dev/null > "$PRIV/packages/npm-global.txt"
+systemctl list-unit-files --state=enabled,masked --no-legend --no-pager | awk '{print $2, $1}' | sort > "$PRIV/services/system.txt"
+systemctl --user list-unit-files --state=enabled --no-legend --no-pager | awk '{print $1}' | sort > "$PRIV/services/user.txt"
+
+# GNOME settings worth restoring
+for p in /org/gnome/shell/extensions/dash-to-dock/ /org/gnome/shell/weather/ /org/gnome/Weather/ \
+         /org/gnome/desktop/default-applications/terminal/; do
+  dconf dump "$p" > "$PRIV/gnome/$(echo "${p#/org/gnome/}" | tr '/' '_' | sed 's/_$//').ini"
+done
+
+# NetworkManager Wi-Fi profiles (nmcli never prints passwords without --show-secrets)
+rm -f "$PRIV"/network/*.txt
+nmcli -t -f NAME,TYPE con show | awk -F: '$2=="802-11-wireless"{print $1}' | while read -r name; do
+  nmcli con show "$name" | grep -vE '^(GENERAL|IP[46]|DHCP[46])\.' > "$PRIV/network/$name.txt"
+done
+
+if commit_all "$PRIV"; then
+  git -C "$PRIV" push -q && echo "private: pushed" || echo "private: push failed, will retry next run" >&2
+elif [[ -n "$(git -C "$PRIV" rev-list '@{u}..HEAD' 2>/dev/null)" ]]; then
+  git -C "$PRIV" push -q   # retry an earlier failed push
+fi

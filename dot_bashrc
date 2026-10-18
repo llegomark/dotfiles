@@ -1,0 +1,27 @@
+#
+# ~/.bashrc
+#
+
+# If not running interactively, don't do anything
+[[ $- != *i* ]] && return
+
+alias ls='ls --color=auto'
+alias grep='grep --color=auto'
+PS1='[\u@\h \W]\$ '
+
+# pnpm
+export PNPM_HOME='/home/linuxdev/.local/share/pnpm'
+case ":$PATH:" in
+  ":$PNPM_HOME/bin:"*) ;;
+  *) export PATH="$PNPM_HOME/bin:$PATH" ;;
+esac
+# pnpm end
+export PATH="$HOME/.local/bin:$PATH"
+
+# fastfetch on each new Ghostty window, tab or split (not nested shells or other terminals)
+if [[ $(< /proc/$PPID/comm) == ghostty ]] && command -v fastfetch >/dev/null; then
+  ~/.config/fastfetch/auto.sh   # logo size follows window width
+fi
+
+# opencode
+export PATH=/home/linuxdev/.opencode/bin:$PATH
