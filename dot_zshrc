@@ -87,3 +87,6 @@ fi
 
 # --- GitHub MCP (Claude Code plugin) reuses the gh CLI token ---------------
 export GITHUB_PERSONAL_ACCESS_TOKEN="$(gh auth token 2>/dev/null)"
+
+# bun completions
+[ -s "/home/linuxdev/.bun/_bun" ] && source "/home/linuxdev/.bun/_bun"
