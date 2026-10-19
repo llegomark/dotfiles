@@ -1,0 +1,7 @@
+[Unit]
+Description=Snapshot dotfiles (public: local commit, private: commit and push)
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/dotfiles-sync
+Environment=PATH=%h/.local/bin:/usr/bin
