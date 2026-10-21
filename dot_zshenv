@@ -15,3 +15,10 @@ path=(
   $path
 )
 export PATH
+
+# react-doctor's telemetry export at exit sometimes grows its main process past
+# 5 GB (the 2026-10-20 OOM kills); with telemetry off, 0 of 22 runs spiked. The
+# score still works. Two lint workers instead of its default 10 use less memory
+# at the same speed.
+export REACT_DOCTOR_NO_TELEMETRY=1
+export REACT_DOCTOR_PARALLEL=2
