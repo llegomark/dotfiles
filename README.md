@@ -6,13 +6,13 @@ Personal configuration for an Arch Linux laptop (GNOME on Wayland, zsh, Ghostty)
 
 | Area | Files |
 |---|---|
-| Shell | `.zshrc`, `.zshenv` (PATH), `.bashrc`, `.bash_profile` |
+| Shell | `.zshrc`, `.zshenv` (PATH, react-doctor memory limits), `.bashrc`, `.bash_profile` |
 | Terminal | Ghostty config (JetBrainsMono Nerd Font, background instance) |
 | fastfetch | `auto.sh` (logo sized to terminal width), `cf-info.sh` (Cloudflare WARP / DNS status lines) |
 | Git | SSH commit signing; identity lives in an unpublished `~/.gitconfig.local` |
 | Tools | npm user prefix, makepkg (all threads, no `-debug` pkgs), mpv, default terminal |
-| systemd user units | weekly Docker prune, Obsidian vault auto-backup |
-| Scripts (`~/.local/bin`) | `obsidian-backup[-watch]`, `dotfiles-sync`, `dotfiles-push` |
+| systemd user units | weekly Docker prune, Obsidian vault auto-backup, hourly dotfiles sync, Agentic Inbox mail notifier |
+| Scripts | `~/.local/bin`: `obsidian-backup[-watch]`, `dotfiles-sync`, `dotfiles-push`; `~/.local/share/agentic-inbox-notifier/notifier.mjs` (desktop notifications for new mail; deployments in an unpublished config, Access tokens in GNOME Keyring) |
 
 ### zsh setup
 Light plugin setup without a framework: zsh-autosuggestions, zsh-syntax-highlighting, starship, fzf (with fd + bat previews), zoxide, direnv, mise and uv. Each integration is skipped if its tool isn't installed.

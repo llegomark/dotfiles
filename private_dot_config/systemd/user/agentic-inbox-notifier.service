@@ -1,0 +1,19 @@
+[Unit]
+Description=Agentic Inbox new-mail desktop notifications
+Documentation=file://%h/.local/share/agentic-inbox-notifier/notifier.mjs
+# Needs the desktop session (notifications, GNOME Keyring, xdg-open).
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/node %h/.local/share/agentic-inbox-notifier/notifier.mjs
+Restart=on-failure
+RestartSec=15
+# Read-only access to the home directory is all it needs.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+
+[Install]
+WantedBy=graphical-session.target

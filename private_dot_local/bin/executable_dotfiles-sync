@@ -37,6 +37,12 @@ copy ~/.config/fastfetch/config.jsonc                home/.config/fastfetch/conf
 copy ~/.config/fastfetch/printer-info.sh             home/.config/fastfetch/printer-info.sh
 copy ~/.config/systemd/user/go2rtc.service           home/.config/systemd/user/go2rtc.service
 copy ~/.local/share/applications/cctv-live.desktop   home/.local/share/applications/cctv-live.desktop
+# go2rtc web UI with the locally patched video-rtc.js (go2rtc.yaml is left out: camera passwords)
+for f in index.html video-rtc.js video-stream.js; do
+  copy ~/.config/go2rtc/www/$f                       home/.config/go2rtc/www/$f
+done
+copy ~/.config/agentic-inbox-notifier/config.json    home/.config/agentic-inbox-notifier/config.json
+copy ~/.config/monitors.xml                          home/.config/monitors.xml
 
 # System files (restore with sudo)
 for f in /etc/fstab /etc/pacman.conf /etc/pacman.d/openai-chatgpt.conf \
@@ -44,7 +50,7 @@ for f in /etc/fstab /etc/pacman.conf /etc/pacman.d/openai-chatgpt.conf \
          /etc/docker/daemon.json /etc/systemd/system/grub-btrfsd.service.d/override.conf \
          /etc/timeshift/timeshift.json /etc/timeshift-autosnap.conf \
          /etc/conf.d/wireless-regdom /etc/mkinitcpio.conf /etc/default/grub \
-         /etc/systemd/zram-generator.conf; do
+         /etc/systemd/zram-generator.conf /etc/default/earlyoom; do
   copy "$f" "etc${f#/etc}"
 done
 
