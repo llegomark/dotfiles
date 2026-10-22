@@ -71,6 +71,21 @@ function escapeMarkup(text) {
 	return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/**
+ * Open `url` in the default browser. The user manager starts it as its own
+ * unit rather than as our child: a child inherits this service's sandbox
+ * (private /tmp, read-only home), where Chrome can't reach the running
+ * instance and aborts, and it would be killed whenever this service stops.
+ */
+function openInBrowser(url) {
+	const child = spawn("systemd-run", ["--user", "--quiet", "--collect", "--property=ExitType=cgroup", "--description=Open mail notification link", "--", "xdg-open", url], { stdio: "ignore" });
+
+	child.on("exit", (code) => {
+		if (code !== 0) log("opening the browser failed", { url, code });
+	});
+	child.on("error", (e) => log("opening the browser failed", { url, error: e.message }));
+}
+
 /** Show a notification; "Open" (or clicking it) opens `url` in the browser. */
 function notify({ title, body, url, urgency = "normal", icon = "mail-unread" }) {
 	// NOTIFIER_DRY_RUN=1 logs notifications instead of showing them (for testing).
@@ -90,7 +105,7 @@ function notify({ title, body, url, urgency = "normal", icon = "mail-unread" }) 
 		chosen += chunk;
 	});
 	child.on("close", () => {
-		if (url && ["open", "default"].includes(chosen.trim())) spawn("xdg-open", [url], { stdio: "ignore", detached: true }).unref();
+		if (url && ["open", "default"].includes(chosen.trim())) openInBrowser(url);
 	});
 	child.on("error", (e) => log("notify-send failed", { error: e.message }));
 }
