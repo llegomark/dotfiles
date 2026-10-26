@@ -1,0 +1,19 @@
+# Alacritty replaced Ghostty as the default terminal (2026-10-26):
+# Ghostty used too much CPU and made the laptop hang.
+
+[window]
+# Open new windows at a normal size (columns x rows), like the old Ghostty setup.
+dimensions = { columns = 120, lines = 34 }
+padding = { x = 6, y = 6 }
+
+[font]
+# Nerd Font: adds the icons used by the starship prompt and eza.
+# Needs the ttf-jetbrains-mono-nerd package.
+normal = { family = "JetBrainsMono Nerd Font" }
+size = 12
+
+[scrolling]
+history = 10000
+
+[selection]
+save_to_clipboard = true
