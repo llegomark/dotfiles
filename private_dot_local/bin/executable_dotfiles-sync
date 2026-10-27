@@ -43,6 +43,10 @@ for f in index.html video-rtc.js video-stream.js; do
 done
 copy ~/.config/agentic-inbox-notifier/config.json    home/.config/agentic-inbox-notifier/config.json
 copy ~/.config/monitors.xml                          home/.config/monitors.xml
+# Claude Code memory notes (whole folder, so deleted notes disappear here too)
+mem=.claude/projects/-home-linuxdev/memory
+rm -rf "$PRIV/home/$mem"
+[[ -d ~/$mem ]] && mkdir -p "$PRIV/home/$mem" && cp -p ~/$mem/*.md "$PRIV/home/$mem/"
 
 # System files (restore with sudo)
 for f in /etc/fstab /etc/pacman.conf /etc/pacman.d/openai-chatgpt.conf \
