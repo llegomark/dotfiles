@@ -57,6 +57,16 @@ nash() {
   cd ~/Documents/github/tanstack-start-nash-reviewer && claude "$@"
 }
 
+# Open the NASH site repo in VS Code
+nashcode() {
+  code ~/Documents/github/tanstack-start-nash-reviewer
+}
+
+# Open the NASH blog repo in VS Code
+nashblog() {
+  code ~/Documents/github/astro-nash-reviewer-blog
+}
+
 # Jump to the NASH site repo and deploy it (build + wrangler deploy)
 deploy() {
   cd ~/Documents/github/tanstack-start-nash-reviewer && npm run deploy
