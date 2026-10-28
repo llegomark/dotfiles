@@ -57,6 +57,11 @@ nash() {
   cd ~/Documents/github/tanstack-start-nash-reviewer && claude "$@"
 }
 
+# Jump to the NASH site repo and deploy it (build + wrangler deploy)
+deploy() {
+  cd ~/Documents/github/tanstack-start-nash-reviewer && npm run deploy
+}
+
 # Update Claude Code and Codex; the second runs even if the first fails
 au() {
   print -P '%F{cyan}==> Updating Claude Code%f'
