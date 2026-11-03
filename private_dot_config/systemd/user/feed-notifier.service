@@ -1,0 +1,17 @@
+[Unit]
+Description=Check feeds and notify about new posts (feed-notifier)
+Documentation=file://%h/.local/bin/feed-notifier
+After=network-online.target graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/feed-notifier run
+# oneshot has no start timeout by default: a stuck run would block every later one.
+TimeoutStartSec=10min
+# Read-only home, writes only to its archive. Notifications run in their own units (systemd-run), outside this
+# sandbox, so the browser they open isn't sandboxed and outlives this run.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/feed-notifier
+PrivateTmp=yes

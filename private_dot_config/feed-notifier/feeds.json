@@ -1,0 +1,5 @@
+{
+  "feeds": [
+    { "url": "https://www.deped.gov.ph/feed/", "name": "DepEd" }
+  ]
+}

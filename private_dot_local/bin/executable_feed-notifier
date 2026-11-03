@@ -1,0 +1,659 @@
+#!/usr/bin/python3 -I
+"""Feed notifier: desktop notifications and a SQLite archive for RSS and Atom feeds.
+
+Every 5 minutes (feed-notifier.timer) it checks each feed in ~/.config/feed-notifier/feeds.json, saves every post
+(full text included) in ~/.local/share/feed-notifier/feeds.sqlite, and shows a GNOME notification for each new one
+with an Open button. Read saved posts with `feed-notifier list`, `show ID`, `search WORDS` and `open ID`.
+
+Design: docs/superpowers/specs/2026-11-04-feed-notifier-design.md in ~/Documents/github/feed-notifier. Python
+standard library only.
+"""
+
+import argparse
+import collections
+import datetime
+import email.utils
+import gzip
+import html
+import html.parser
+import http.client
+import io
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+import zlib
+from xml.etree import ElementTree
+
+USER_AGENT = "feed-notifier/1.0"
+TIMEOUT = 30  # seconds
+MAX_BYTES = 10 * 1024 * 1024  # per feed body
+MAX_SINGLE = 3  # more new posts than this in one run get one summary notification
+SUMMARY_TITLES = 5
+MAX_PAGES = 5  # when every post on a feed's first page is new, older pages (?paged=2, ...) are read too
+NOTIFY_RETRIES = 30  # a notification that fails (GNOME not up yet) is retried this often,
+NOTIFY_RETRY_SECONDS = 10  # this far apart: 5 minutes
+
+Feed = collections.namedtuple("Feed", "title link items")
+Item = collections.namedtuple("Item", "key link title author published categories summary content")
+
+
+class FeedError(Exception):
+    """A body that isn't an RSS or Atom feed."""
+
+
+def parse_date(text):
+    """An RSS (RFC 822) or Atom (ISO 8601) date as a UTC string `2026-11-03T08:48:24Z`, or None."""
+    if not text or not text.strip():
+        return None
+    text = text.strip()
+    try:
+        moment = email.utils.parsedate_to_datetime(text)
+    except (TypeError, ValueError, IndexError):
+        try:
+            moment = datetime.datetime.fromisoformat(text[:-1] + "Z" if text.endswith("z") else text)
+        except ValueError:
+            return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=datetime.UTC)
+    return moment.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+_BLOCK = {
+    "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "table", "blockquote", "section", "article",
+    "figure", "figcaption", "header", "footer", "pre", "hr",
+}
+_SKIP = {"script", "style", "noscript"}
+
+
+class _Text(html.parser.HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts, self.skipping = [], 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _SKIP:
+            self.skipping += 1
+        elif tag in _BLOCK:
+            self.parts.append("\n\n")
+        elif tag in ("br", "tr"):
+            self.parts.append("\n")
+        elif tag == "li":
+            self.parts.append("\n• ")
+        elif tag in ("td", "th"):
+            self.parts.append(" ")
+
+    def handle_endtag(self, tag):
+        if tag in _SKIP:
+            self.skipping = max(0, self.skipping - 1)
+        elif tag in _BLOCK:
+            self.parts.append("\n\n")
+
+    def handle_data(self, data):
+        if not self.skipping:
+            self.parts.append(re.sub(r"\s+", " ", data))
+
+
+def html_to_text(markup):
+    """Readable plain text from post HTML: paragraphs apart, list items as bullets, scripts and styles dropped."""
+    parser = _Text()
+    parser.feed(markup or "")
+    parser.close()
+    lines, blank = [], False
+    for line in "".join(parser.parts).split("\n"):
+        line = line.strip()
+        if line:
+            if blank and lines:
+                lines.append("")
+            lines.append(line)
+            blank = False
+        else:
+            blank = True
+    return "\n".join(lines)
+
+
+_DTD = re.compile(rb"<!(?:DOCTYPE|ENTITY)", re.IGNORECASE)
+_ATOM = "{http://www.w3.org/2005/Atom}"
+_CONTENT = "{http://purl.org/rss/1.0/modules/content/}encoded"
+_CREATOR = "{http://purl.org/dc/elements/1.1/}creator"
+
+
+def _text(element, tag):
+    found = element.find(tag) if element is not None else None
+    return (found.text or "").strip() if found is not None else ""
+
+
+def _rss(root):
+    channel = root.find("channel")
+    if channel is None:
+        raise FeedError("an <rss> without a <channel>")
+    items = []
+    for node in channel.findall("item"):
+        link = _text(node, "link")
+        key = _text(node, "guid") or link
+        if not key:
+            continue
+        items.append(
+            Item(
+                key=key,
+                link=link,
+                title=html.unescape(_text(node, "title")),
+                author=_text(node, _CREATOR) or _text(node, "author"),
+                published=parse_date(_text(node, "pubDate")),
+                categories=[c.text.strip() for c in node.findall("category") if c.text and c.text.strip()],
+                summary=html_to_text(_text(node, "description")),
+                content=_text(node, _CONTENT),
+            )
+        )
+    return Feed(html.unescape(_text(channel, "title")), _text(channel, "link"), items)
+
+
+def _atom_link(node):
+    for link in node.findall(_ATOM + "link"):
+        if link.get("rel", "alternate") == "alternate" and link.get("href"):
+            return link.get("href").strip()
+    return ""
+
+
+def _atom(root):
+    items = []
+    for node in root.findall(_ATOM + "entry"):
+        link = _atom_link(node)
+        key = _text(node, _ATOM + "id") or link
+        if not key:
+            continue
+        author = node.find(_ATOM + "author")
+        items.append(
+            Item(
+                key=key,
+                link=link,
+                title=html.unescape(_text(node, _ATOM + "title")),
+                author=_text(author, _ATOM + "name"),
+                published=parse_date(_text(node, _ATOM + "published") or _text(node, _ATOM + "updated")),
+                categories=[c.get("term").strip() for c in node.findall(_ATOM + "category") if c.get("term")],
+                summary=html_to_text(_text(node, _ATOM + "summary")),
+                content=_text(node, _ATOM + "content"),
+            )
+        )
+    return Feed(html.unescape(_text(root, _ATOM + "title")), _atom_link(root), items)
+
+
+def parse_feed(body):
+    """Feed(title, link, items) from an RSS 2.0 or Atom body, items in the feed's order. Raises FeedError for
+    anything else, such as an HTML page served in the feed's place. A DOCTYPE or ENTITY is refused in the prolog
+    (where entity attacks have to be); inside a post's CDATA it's just text."""
+    root_start = re.search(rb"<(?![?!])", body)
+    if _DTD.search(body if root_start is None else body[: root_start.start()]):
+        raise FeedError("has a DOCTYPE or ENTITY (an HTML page, or not a plain feed)")
+    try:
+        root = ElementTree.fromstring(body)
+    except ElementTree.ParseError as error:
+        raise FeedError(f"not XML: {error}") from None
+    if root.tag == "rss":
+        return _rss(root)
+    if root.tag == _ATOM + "feed":
+        return _atom(root)
+    raise FeedError(f"not an RSS or Atom feed: <{root.tag}>")
+
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS feeds (
+    url TEXT PRIMARY KEY, title TEXT, link TEXT, etag TEXT, last_modified TEXT, checked_at TEXT, ok INTEGER,
+    error TEXT);
+CREATE TABLE IF NOT EXISTS items (
+    id INTEGER PRIMARY KEY, feed_url TEXT NOT NULL, key TEXT NOT NULL, link TEXT, title TEXT, author TEXT,
+    published TEXT, categories TEXT, summary TEXT, content TEXT, first_seen TEXT NOT NULL,
+    UNIQUE (feed_url, key));
+CREATE INDEX IF NOT EXISTS items_recent ON items (published, id);
+"""
+
+
+class Store:
+    """The SQLite archive: each feed's validators and last check, and every post ever seen, full text included."""
+
+    def __init__(self, path):
+        self.db = sqlite3.connect(path, isolation_level=None)
+        self.db.row_factory = sqlite3.Row
+        self.db.execute("PRAGMA busy_timeout = 10000")
+        self.db.executescript(_SCHEMA)
+
+    def close(self):
+        self.db.close()
+
+    def feed_meta(self, url):
+        """(ETag, Last-Modified) from the feed's last good fetch, for a conditional GET."""
+        row = self.db.execute("SELECT etag, last_modified FROM feeds WHERE url = ?", (url,)).fetchone()
+        return (row["etag"], row["last_modified"]) if row else (None, None)
+
+    def save_feed_meta(self, url, title, link, etag, last_modified, checked_at):
+        self.db.execute(
+            "INSERT INTO feeds (url, title, link, etag, last_modified, checked_at, ok, error)"
+            " VALUES (?, ?, ?, ?, ?, ?, 1, NULL) ON CONFLICT (url) DO UPDATE SET title = excluded.title,"
+            " link = excluded.link, etag = excluded.etag, last_modified = excluded.last_modified,"
+            " checked_at = excluded.checked_at, ok = 1, error = NULL",
+            (url, title, link, etag, last_modified, checked_at),
+        )
+
+    def record_check(self, url, checked_at):
+        """A check with nothing new (a 304)."""
+        self.db.execute(
+            "INSERT INTO feeds (url, checked_at, ok) VALUES (?, ?, 1) ON CONFLICT (url) DO UPDATE SET"
+            " checked_at = excluded.checked_at, ok = 1, error = NULL",
+            (url, checked_at),
+        )
+
+    def record_failure(self, url, checked_at, error):
+        """A failed check: noted, with the validators of the last good fetch kept."""
+        self.db.execute(
+            "INSERT INTO feeds (url, checked_at, ok, error) VALUES (?, ?, 0, ?) ON CONFLICT (url) DO UPDATE SET"
+            " checked_at = excluded.checked_at, ok = 0, error = excluded.error",
+            (url, checked_at, error),
+        )
+
+    def known_keys(self, feed_url, keys):
+        keys = list(keys)
+        if not keys:
+            return set()
+        marks = ", ".join("?" * len(keys))
+        rows = self.db.execute(f"SELECT key FROM items WHERE feed_url = ? AND key IN ({marks})", (feed_url, *keys))
+        return {row["key"] for row in rows}
+
+    def has_items(self, url):
+        return self.db.execute("SELECT 1 FROM items WHERE feed_url = ? LIMIT 1", (url,)).fetchone() is not None
+
+    def save_items(self, feed_url, items, now):
+        """Saves a feed's items (newest first, as feeds list them) and returns the ids of the new ones, oldest
+        first. An item already saved is updated in place and keeps its id and first_seen."""
+        new = []
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            for item in reversed(items):
+                values = (item.link, item.title, item.author, item.published, json.dumps(item.categories),
+                          item.summary, item.content)
+                updated = self.db.execute(
+                    "UPDATE items SET link = ?, title = ?, author = ?, published = ?, categories = ?, summary = ?,"
+                    " content = ? WHERE feed_url = ? AND key = ?",
+                    (*values, feed_url, item.key),
+                )
+                if updated.rowcount == 0:
+                    inserted = self.db.execute(
+                        "INSERT INTO items (feed_url, key, link, title, author, published, categories, summary,"
+                        " content, first_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (feed_url, item.key, *values, now),
+                    )
+                    new.append(inserted.lastrowid)
+        except BaseException:
+            self.db.execute("ROLLBACK")
+            raise
+        self.db.execute("COMMIT")
+        return new
+
+    @staticmethod
+    def _item(row):
+        if row is None:
+            return None
+        item = dict(row)
+        item["categories"] = json.loads(item["categories"] or "[]")
+        return item
+
+    def get(self, item_id):
+        return self._item(self.db.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone())
+
+    def latest(self, n):
+        rows = self.db.execute(
+            "SELECT * FROM items ORDER BY COALESCE(published, first_seen) DESC, id DESC LIMIT ?", (n,)
+        )
+        return [self._item(row) for row in rows]
+
+    def search(self, words):
+        """Posts whose title, summary or text contains every word, case-insensitive, newest first."""
+        where, params = [], []
+        for word in words:
+            pattern = "%" + word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            where.append(
+                "(title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')"
+            )
+            params += [pattern] * 3
+        if not where:
+            return []
+        rows = self.db.execute(
+            "SELECT * FROM items WHERE " + " AND ".join(where)
+            + " ORDER BY COALESCE(published, first_seen) DESC, id DESC",
+            params,
+        )
+        return [self._item(row) for row in rows]
+
+    def feeds(self):
+        return [dict(row) for row in self.db.execute("SELECT * FROM feeds ORDER BY url")]
+
+
+Response = collections.namedtuple("Response", "status headers body")
+
+
+class FetchError(Exception):
+    """A request that got no usable answer: a network failure, a timeout, or a body over MAX_BYTES."""
+
+
+class Http:
+    """GET with the notifier's user agent, gzip accepted, TIMEOUT seconds, at most MAX_BYTES. Every HTTP status
+    comes back as a Response (304 and errors included); only a missing answer raises FetchError."""
+
+    def get(self, url, etag=None, last_modified=None):
+        headers = {"User-Agent": USER_AGENT, "Accept-Encoding": "gzip"}
+        if etag:
+            headers["If-None-Match"] = etag
+        if last_modified:
+            headers["If-Modified-Since"] = last_modified
+        request = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=TIMEOUT) as answer:
+                status, answer_headers, body = answer.status, answer.headers, answer.read(MAX_BYTES + 1)
+        except urllib.error.HTTPError as answer:
+            with answer:
+                status, answer_headers, body = answer.code, answer.headers, answer.read(MAX_BYTES + 1)
+        except (OSError, http.client.HTTPException) as error:  # URLError, timeouts, resets, TLS, truncated
+            raise FetchError(str(getattr(error, "reason", error)) or type(error).__name__) from None
+        if body[:2] == b"\x1f\x8b":
+            try:
+                with gzip.GzipFile(fileobj=io.BytesIO(body)) as stream:
+                    body = stream.read(MAX_BYTES + 1)
+            except (OSError, EOFError, zlib.error) as error:
+                raise FetchError(f"bad gzip: {error}") from None
+        if len(body) > MAX_BYTES:
+            raise FetchError("over 10 MB")
+        return Response(status, answer_headers, body)
+
+
+def log(level, message):
+    """One line to the journal: "info" on stdout, "err" on stderr, with the syslog priority journald reads when
+    running under systemd."""
+    stream = sys.stderr if level == "err" else sys.stdout
+    if os.environ.get("JOURNAL_STREAM"):
+        prefix = "<3>" if level == "err" else "<6>"
+    else:
+        prefix = "error: " if level == "err" else ""
+    print(prefix + message, file=stream, flush=True)
+
+
+def check_feed(http, store, url, now):
+    """Fetches and saves one feed: (ids of new posts to announce, error or None). A feed's first fetch saves its
+    posts quietly (no ids). A failure saves nothing but the failed check."""
+    etag, last_modified = store.feed_meta(url)
+    try:
+        answer = http.get(url, etag, last_modified)
+    except FetchError as error:
+        store.record_failure(url, now, str(error))
+        return [], str(error)
+    if answer.status == 304:
+        store.record_check(url, now)
+        return [], None
+    if answer.status != 200:
+        problem = f"answered {answer.status}"
+        store.record_failure(url, now, problem)
+        return [], problem
+    try:
+        feed = parse_feed(answer.body)
+    except FeedError as error:
+        store.record_failure(url, now, str(error))
+        return [], str(error)
+    first = not store.has_items(url)
+    items = list(feed.items)
+    if not first and items and not store.known_keys(url, [item.key for item in items]):
+        items += _older_items(http, url, {item.key for item in items}, store)
+    new = store.save_items(url, items, now)
+    store.save_feed_meta(url, feed.title, feed.link, answer.headers.get("ETag"), answer.headers.get("Last-Modified"), now)
+    return ([] if first else new), None
+
+
+def _page_url(url, page):
+    return url + ("&" if "?" in url else "?") + f"paged={page}"
+
+
+def _older_items(http, url, seen, store):
+    """Posts from WordPress's older feed pages (?paged=2, ...), read when every post on the first page is new: the
+    laptop was off while more posts came out than one page holds. Stops at a page with a known post, a page that
+    adds nothing (a feed that ignores ?paged), a failure, or MAX_PAGES."""
+    older = []
+    for page in range(2, MAX_PAGES + 1):
+        try:
+            answer = http.get(_page_url(url, page))
+            items = parse_feed(answer.body).items if answer.status == 200 else []
+        except (FetchError, FeedError):
+            break
+        fresh = [item for item in items if item.key not in seen]
+        seen.update(item.key for item in fresh)
+        older += fresh
+        if not fresh or store.known_keys(url, [item.key for item in items]):
+            break
+    return older
+
+
+def notify_argv(program, db_path, name, ids):
+    """The command that shows a notification for `ids`, in its own transient user unit: outside the timer
+    service's sandbox, and alive after the service exits so the Open button still works."""
+    return [
+        "systemd-run", "--user", "--quiet", "--collect", "--property=RuntimeMaxSec=1d",
+        "--description=Feed notification", program, "--db", db_path, "notify", "--name", name,
+        *(str(i) for i in ids),
+    ]
+
+
+def run(feeds, store, http, launch, now, program, db_path, log=log):
+    """Checks every feed and announces new posts: one notification each for up to MAX_SINGLE, else one summary.
+    Returns 0, or 1 if any feed failed (the others still run)."""
+    failed = False
+    for feed in feeds:
+        url, name = feed["url"], feed.get("name") or feed["url"]
+        try:
+            new, problem = check_feed(http, store, url, now)
+        except Exception as error:  # a bug or an odd answer in one feed mustn't stop the others
+            new, problem = [], f"{type(error).__name__}: {error}"
+            store.record_failure(url, now, problem)
+        if problem:
+            failed = True
+            log("err", f"{name}: {url}: {problem}; nothing changed")
+            continue
+        groups = [[i] for i in new] if len(new) <= MAX_SINGLE else [new]
+        for group in groups:
+            launch(notify_argv(program, db_path, name, group))
+        if new:
+            log("info", f"{name}: {len(new)} new")
+    return 1 if failed else 0
+
+
+def launch(argv):
+    """Starts a notification job; a failure is logged, not fatal."""
+    try:
+        done = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        log("err", f"couldn't start a notification: {error}")
+        return
+    if done.returncode:
+        log("err", f"couldn't start a notification: {done.stderr.strip()[:300]}")
+
+
+def _home(variable, fallback):
+    return os.environ.get(variable) or os.path.join(os.path.expanduser("~"), fallback)
+
+
+DEFAULT_CONFIG = os.path.join(_home("XDG_CONFIG_HOME", ".config"), "feed-notifier", "feeds.json")
+DEFAULT_DB = os.path.join(_home("XDG_DATA_HOME", ".local/share"), "feed-notifier", "feeds.sqlite")
+
+
+def load_feeds(path):
+    """The feeds in feeds.json, {"feeds": [{"url", "name"?}, ...]}. Raises ValueError or OSError."""
+    with open(path, encoding="utf-8") as file:
+        data = json.load(file)
+    feeds = data.get("feeds") if isinstance(data, dict) else None
+    if not isinstance(feeds, list) or not feeds:
+        raise ValueError("no feeds")
+    for feed in feeds:
+        if not isinstance(feed, dict) or not str(feed.get("url", "")).startswith(("https://", "http://")):
+            raise ValueError(f"a feed without an http(s) url: {feed!r}")
+    return feeds
+
+
+def _run_command(args):
+    try:
+        return subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    except OSError as error:
+        return subprocess.CompletedProcess(args, 127, "", str(error))
+
+
+def _web_link(url):
+    """Only http(s) links are opened: a feed (or a hacked site) can't make Open start another app's handler."""
+    return isinstance(url, str) and url.lower().startswith(("https://", "http://"))
+
+
+def _open(url, runner):
+    """Opens a web link in the browser; returns (ok, problem)."""
+    if not _web_link(url):
+        return False, f"not a web link, not opened: {url[:200]}"
+    done = runner(_open_argv(url))
+    if done.returncode:
+        return False, f"couldn't open {url}: {(done.stderr or '').strip()[:300]}"
+    return True, None
+
+
+def _open_argv(url):
+    return [
+        "systemd-run", "--user", "--quiet", "--collect", "--property=ExitType=cgroup",
+        "--description=Open feed post", "--", "xdg-open", url,
+    ]
+
+
+def _local(stamp):
+    if not stamp:
+        return ""
+    return datetime.datetime.fromisoformat(stamp).astimezone().strftime("%Y-%m-%d %H:%M")
+
+
+def _names(config):
+    try:
+        return {feed["url"]: feed.get("name") or feed["url"] for feed in load_feeds(config)}
+    except (OSError, ValueError):
+        return {}
+
+
+def _table(items, names):
+    print(f"{'ID':>6}  {'Date':16}  {'Feed':10}  Title")
+    for item in items:
+        name = names.get(item["feed_url"], "")[:10]
+        print(f"{item['id']:>6}  {_local(item['published'] or item['first_seen']):16}  {name:10}  {item['title']}")
+
+
+def _notify(store, name, ids, runner, sleep):
+    items = [item for item in (store.get(i) for i in ids) if item]
+    if not items:
+        return 0
+    if len(items) == 1:
+        item = items[0]
+        summary = f"{name}: {item['title']}"
+        body = " · ".join(part for part in (_local(item["published"]), ", ".join(item["categories"])) if part)
+        link = item["link"]
+    else:
+        summary = f"{name}: {len(items)} new posts"
+        lines = [f"• {item['title']}" for item in items[:SUMMARY_TITLES]]
+        if len(items) > SUMMARY_TITLES:
+            lines.append(f"…and {len(items) - SUMMARY_TITLES} more")
+        body = "\n".join(lines)
+        feed = next((x for x in store.feeds() if x["url"] == items[0]["feed_url"]), None)
+        link = (feed and feed["link"]) or items[-1]["link"]
+    send = [
+        "notify-send", "--app-name=Feed notifier", "--icon=application-rss+xml", "--action=default=Open",
+        "--action=open=Open", "--wait", summary, html.escape(body, quote=False),
+    ]
+    for attempt in range(NOTIFY_RETRIES + 1):
+        done = runner(send)
+        if done.returncode == 0:
+            break
+        if attempt == 0:
+            log("err", f"couldn't show a notification, retrying for 5 minutes: {(done.stderr or '').strip()[:300]}")
+        if attempt < NOTIFY_RETRIES:
+            sleep(NOTIFY_RETRY_SECONDS)
+    else:
+        log("err", f"gave up showing the notification \"{summary}\"; the posts are saved (feed-notifier list)")
+        return 1
+    if (done.stdout or "").strip() in ("default", "open") and link:
+        ok, problem = _open(link, runner)
+        if not ok:
+            log("err", problem)
+    return 0
+
+
+def main(argv=None, runner=_run_command, sleep=time.sleep):
+    parser = argparse.ArgumentParser(
+        prog="feed-notifier",
+        description="Desktop notifications for new feed posts, and a SQLite archive of every post.",
+    )
+    parser.add_argument("--config", default=DEFAULT_CONFIG, help=f"the feeds file (default {DEFAULT_CONFIG})")
+    parser.add_argument("--db", default=DEFAULT_DB, help=f"the archive (default {DEFAULT_DB})")
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("run", help="check every feed now and notify about new posts (the timer runs this)")
+    listing = commands.add_parser("list", help="the latest saved posts")
+    listing.add_argument("-n", type=int, default=20, help="how many (default 20)")
+    commands.add_parser("show", help="one saved post's full text").add_argument("id", type=int)
+    commands.add_parser("search", help="saved posts containing every word").add_argument("words", nargs="+")
+    commands.add_parser("open", help="open a saved post in the browser").add_argument("id", type=int)
+    notify = commands.add_parser("notify", help=argparse.SUPPRESS)
+    notify.add_argument("--name", required=True)
+    notify.add_argument("ids", type=int, nargs="+")
+    args = parser.parse_args(argv)
+
+    if args.command == "run":
+        try:
+            feeds = load_feeds(args.config)
+        except (OSError, ValueError) as error:
+            print(f"error: {args.config}: {error}", file=sys.stderr)
+            return 2
+        os.makedirs(os.path.dirname(os.path.abspath(args.db)), exist_ok=True)
+    store = Store(args.db)
+    try:
+        if args.command == "run":
+            now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+            program = os.path.abspath(sys.argv[0])
+            return run(feeds, store, Http(), launch, now, program, os.path.abspath(args.db))
+        if args.command == "notify":
+            return _notify(store, args.name, args.ids, runner, sleep)
+        names = _names(args.config)
+        if args.command == "list":
+            for feed in store.feeds():
+                state = "OK" if feed["ok"] else f"failed: {feed['error']}"
+                print(f"{names.get(feed['url'], feed['title'] or feed['url'])}: checked {_local(feed['checked_at'])}, {state}")
+            print()
+            _table(store.latest(args.n), names)
+            return 0
+        if args.command == "search":
+            found = store.search(args.words)
+            if not found:
+                print("No saved posts match.")
+                return 0
+            _table(found, names)
+            return 0
+        item = store.get(args.id)
+        if not item:
+            print(f"No saved post {args.id}.", file=sys.stderr)
+            return 1
+        if args.command == "open":
+            ok, problem = _open(item["link"], runner)
+            if not ok:
+                print(f"error: {problem}", file=sys.stderr)
+                return 1
+            return 0
+        print(item["title"])
+        print(item["link"])
+        print(" · ".join(part for part in (item["author"], _local(item["published"]), ", ".join(item["categories"])) if part))
+        print()
+        print(html_to_text(item["content"]) or item["summary"])
+        return 0
+    finally:
+        store.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
