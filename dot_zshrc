@@ -110,3 +110,7 @@ export GITHUB_PERSONAL_ACCESS_TOKEN="$(gh auth token 2>/dev/null)"
 
 # bun completions
 [ -s "/home/linuxdev/.bun/_bun" ] && source "/home/linuxdev/.bun/_bun"
+
+# teacherph-schools and deped-fabric-data (repos in ~/Documents/schools-data)
+export LOCALAPPDATA="$HOME/.local/share"           # where both projects keep their data outside the repos
+export CHROME_PATH=/usr/bin/google-chrome-stable   # the browser scripts/check-pages.mjs uses for screenshots
