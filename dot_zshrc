@@ -114,3 +114,9 @@ export GITHUB_PERSONAL_ACCESS_TOKEN="$(gh auth token 2>/dev/null)"
 # teacherph-schools and deped-fabric-data (repos in ~/Documents/schools-data)
 export LOCALAPPDATA="$HOME/.local/share"           # where both projects keep their data outside the repos
 export CHROME_PATH=/usr/bin/google-chrome-stable   # the browser scripts/check-pages.mjs uses for screenshots
+
+# --- Temp folders on disk, not in /tmp ----------------------------------------
+# /tmp is RAM-backed (tmpfs) with a per-user quota; keep these big caches on disk
+export CLAUDE_CODE_TMPDIR="$HOME/.cache/claude-tmp"
+export NODE_COMPILE_CACHE="$HOME/.cache/node-compile-cache"
+mkdir -p "$CLAUDE_CODE_TMPDIR" "$NODE_COMPILE_CACHE"
