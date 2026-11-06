@@ -57,6 +57,11 @@ nash() {
   cd ~/Documents/github/tanstack-start-nash-reviewer && claude "$@"
 }
 
+# Jump to the NASH blog repo and start Claude Code there (extra args go to claude)
+blog() {
+  cd ~/Documents/github/astro-nash-reviewer-blog && claude "$@"
+}
+
 # Open the NASH site repo in VS Code
 nashcode() {
   code ~/Documents/github/tanstack-start-nash-reviewer
