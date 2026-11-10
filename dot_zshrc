@@ -105,10 +105,6 @@ fi
 source /usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh
 source /usr/share/zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 
-# --- fastfetch on each new Ghostty window, tab or split --------------------
-if [[ $(< /proc/$PPID/comm) == ghostty ]] && (( $+commands[fastfetch] )); then
-  ~/.config/fastfetch/auto.sh   # logo size follows window width
-fi
 
 # --- GitHub MCP (Claude Code plugin) reuses the gh CLI token ---------------
 export GITHUB_PERSONAL_ACCESS_TOKEN="$(gh auth token 2>/dev/null)"
