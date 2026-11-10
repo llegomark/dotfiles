@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Trim yay's AUR build cache (~/.cache/yay). yay's own cleanAfter keeps built
+# packages (*.pkg.*) and build folders, so the cache keeps growing.
+# For each package folder this keeps the git clone (yay needs it to show PKGBUILD
+# diffs on the next update) and deletes everything else: built packages,
+# downloaded sources, src/ and pkg/. Run daily by yay-cache-clean.timer.
+set -uo pipefail
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/yay"
+[[ -d $cache ]] || exit 0
+
+# Never touch the cache while an update or build is running.
+if pgrep -x 'yay|makepkg|pacman' >/dev/null; then
+  echo "yay/makepkg/pacman is running; skipping today."
+  exit 0
+fi
+
+before=$(du -sh "$cache" | cut -f1)
+for dir in "$cache"/*/; do
+  dir=${dir%/}
+  chmod -R u+w "$dir" 2>/dev/null   # makepkg can leave read-only files in pkg/
+  if [[ -d $dir/.git ]]; then
+    git -C "$dir" clean -ffdxq
+  else
+    rm -rf "$dir"                   # not a yay clone: leftover, remove it
+  fi
+done
+echo "yay cache: $before -> $(du -sh "$cache" | cut -f1)"

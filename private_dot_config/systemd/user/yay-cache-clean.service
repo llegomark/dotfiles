@@ -1,0 +1,8 @@
+[Unit]
+Description=Trim yay's AUR build cache (keeps PKGBUILD clones)
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/yay-cache-clean
+Nice=19
+IOSchedulingClass=idle
