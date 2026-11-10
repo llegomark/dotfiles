@@ -1,9 +1,5 @@
 #
-# ~/.bash_profile
+# ~/.bash_profile — login shells (the desktop session, ssh, `bash -l`)
 #
 
 [[ -f ~/.bashrc ]] && . ~/.bashrc
-
-# bun
-export BUN_INSTALL="$HOME/.bun"
-export PATH="$BUN_INSTALL/bin:$PATH"

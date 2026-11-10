@@ -1,27 +1,145 @@
 #
-# ~/.bashrc
+# ~/.bashrc — bash is the login shell (ported from ~/.zshrc and ~/.zshenv,
+# which stay in place; switch back with `chsh -s /usr/bin/zsh`)
 #
 
-# If not running interactively, don't do anything
+# --- Environment (every bash, interactive or not) ---------------------------
+# Login shells reach this through ~/.bash_profile, so the desktop session and
+# everything started from it (Claude Code, editors) get these too.
+
+path_prepend() {   # add $1 to the front of PATH unless it's already there
+  case ":$PATH:" in *":$1:"*) ;; *) PATH="$1:$PATH" ;; esac
+}
+
+export PNPM_HOME="$HOME/.local/share/pnpm"
+export BUN_INSTALL="$HOME/.bun"
+path_prepend "$HOME/.opencode/bin"
+path_prepend "$BUN_INSTALL/bin"
+path_prepend "$PNPM_HOME/bin"
+path_prepend "$HOME/.local/bin"
+export PATH
+unset -f path_prepend
+
+# react-doctor's telemetry export at exit sometimes grows its main process past
+# 5 GB (the 2026-10-20 OOM kills); with telemetry off, 0 of 22 runs spiked. The
+# score still works. Two lint workers instead of its default 10 use less memory
+# at the same speed.
+export REACT_DOCTOR_NO_TELEMETRY=1
+export REACT_DOCTOR_PARALLEL=2
+
+# teacherph-schools and deped-fabric-data (repos in ~/Documents/schools-data)
+export LOCALAPPDATA="$HOME/.local/share"           # where both projects keep their data outside the repos
+export CHROME_PATH=/usr/bin/google-chrome-stable   # the browser scripts/check-pages.mjs uses for screenshots
+
+# /tmp is RAM-backed (tmpfs) with a per-user quota; keep these big caches on disk
+export CLAUDE_CODE_TMPDIR="$HOME/.cache/claude-tmp"
+export NODE_COMPILE_CACHE="$HOME/.cache/node-compile-cache"
+mkdir -p "$CLAUDE_CODE_TMPDIR" "$NODE_COMPILE_CACHE"
+
+# If not running interactively, stop here
 [[ $- != *i* ]] && return
 
+# --- History ---------------------------------------------------------------
+HISTFILE=~/.bash_history
+HISTSIZE=50000
+HISTFILESIZE=50000
+HISTCONTROL=ignoreboth:erasedups   # no duplicates; commands starting with a space aren't saved
+HISTTIMEFORMAT='%F %T  '           # save timestamps
+shopt -s histappend cmdhist
+PROMPT_COMMAND+=('history -a; history -n')   # share history between open terminals
+
+# --- General ---------------------------------------------------------------
+shopt -s autocd           # type a folder name to cd into it
+shopt -s checkwinsize globstar
+bind 'set bell-style none'
+
+# Ctrl+Left/Right jump words, Home/End/Delete work as expected
+bind '"\e[1;5D": backward-word'
+bind '"\e[1;5C": forward-word'
+bind '"\e[H": beginning-of-line'
+bind '"\e[F": end-of-line'
+bind '"\e[3~": delete-char'
+
+# --- Completion (bash-completion is loaded by /etc/bash.bashrc) -------------
+bind 'set completion-ignore-case on'        # case-insensitive
+bind 'set show-all-if-ambiguous on'
+bind 'set menu-complete-display-prefix on'
+bind 'set colored-stats on'
+bind 'set colored-completion-prefix on'
+bind 'TAB: menu-complete'                   # Tab cycles through the matches
+bind '"\e[Z": menu-complete-backward'       # Shift+Tab goes back
+
+# --- Aliases ---------------------------------------------------------------
 alias ls='ls --color=auto'
+alias ll='ls -lah --color=auto'
 alias grep='grep --color=auto'
-PS1='[\u@\h \W]\$ '
 
-# pnpm
-export PNPM_HOME='/home/linuxdev/.local/share/pnpm'
-case ":$PATH:" in
-  ":$PNPM_HOME/bin:"*) ;;
-  *) export PATH="$PNPM_HOME/bin:$PATH" ;;
-esac
-# pnpm end
-export PATH="$HOME/.local/bin:$PATH"
+if command -v eza >/dev/null; then
+  alias ls='eza --group-directories-first'
+  alias ll='eza -lah --git --group-directories-first'
+  alias lt='eza --tree --level=2 --git-ignore'
+fi
+command -v bat >/dev/null && export MANPAGER="sh -c 'col -bx | bat -l man -p'" MANROFFOPT='-c'
+command -v lazygit >/dev/null && alias lg='lazygit'
 
-# fastfetch on each new Ghostty window, tab or split (not nested shells or other terminals)
+# AI coding CLIs
+alias c='claude'
+alias o='codex'
+alias oc='opencode --auto'   # opencode's equivalent of --dangerously-skip-permissions
+
+# Jump to the NASH site repo and start Claude Code there (extra args go to claude)
+nash() {
+  cd ~/Documents/github/tanstack-start-nash-reviewer && claude "$@"
+}
+
+# Jump to the NASH blog repo and start Claude Code there (extra args go to claude)
+blog() {
+  cd ~/Documents/github/astro-nash-reviewer-blog && claude "$@"
+}
+
+# Open the NASH site repo in VS Code
+nashcode() {
+  code ~/Documents/github/tanstack-start-nash-reviewer
+}
+
+# Open the NASH blog repo in VS Code
+nashblog() {
+  code ~/Documents/github/astro-nash-reviewer-blog
+}
+
+# Jump to the NASH site repo and deploy it (build + wrangler deploy)
+deploy() {
+  cd ~/Documents/github/tanstack-start-nash-reviewer && npm run deploy
+}
+
+# Update Claude Code and Codex; the second runs even if the first fails
+au() {
+  printf '\e[36m==> Updating Claude Code\e[0m\n'
+  claude update
+  printf '\e[36m==> Updating Codex\e[0m\n'
+  curl -fsSL https://chatgpt.com/codex/install.sh | sh
+}
+
+# --- Tools -----------------------------------------------------------------
+eval "$(fzf --bash)"              # Ctrl+R history, Ctrl+T files, Alt+C cd
+eval "$(zoxide init bash)"        # z <dir>, zi for interactive pick
+eval "$(starship init bash)"      # prompt
+command -v direnv >/dev/null && eval "$(direnv hook bash)"   # auto-load .envrc
+command -v mise >/dev/null && eval "$(mise activate bash)"   # per-project tool versions
+command -v uv >/dev/null && eval "$(uv generate-shell-completion bash)"
+
+# fzf: use fd (respects .gitignore) and bat previews when available
+if command -v fd >/dev/null; then
+  export FZF_DEFAULT_COMMAND='fd --type f --hidden --exclude .git'
+  export FZF_CTRL_T_COMMAND="$FZF_DEFAULT_COMMAND"
+  export FZF_ALT_C_COMMAND='fd --type d --hidden --exclude .git'
+fi
+command -v bat >/dev/null && export FZF_CTRL_T_OPTS="--preview 'bat --color=always --line-range :200 {}'"
+
+# --- fastfetch on each new Ghostty window, tab or split --------------------
 if [[ $(< /proc/$PPID/comm) == ghostty ]] && command -v fastfetch >/dev/null; then
   ~/.config/fastfetch/auto.sh   # logo size follows window width
 fi
 
-# opencode
-export PATH=/home/linuxdev/.opencode/bin:$PATH
+# --- GitHub MCP (Claude Code plugin) reuses the gh CLI token ---------------
+export GITHUB_PERSONAL_ACCESS_TOKEN="$(gh auth token 2>/dev/null)"
