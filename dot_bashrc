@@ -39,6 +39,12 @@ mkdir -p "$CLAUDE_CODE_TMPDIR" "$NODE_COMPILE_CACHE"
 # If not running interactively, stop here
 [[ $- != *i* ]] && return
 
+# --- ble.sh: grey suggestions and syntax coloring as you type ----------------
+# (AUR blesh-git, like zsh-autosuggestions + zsh-syntax-highlighting).
+# Right arrow or End accepts a suggestion, Alt+F one word of it. Loaded here,
+# switched on by ble-attach at the very end of this file.
+[[ -r /usr/share/blesh/ble.sh ]] && source /usr/share/blesh/ble.sh --noattach
+
 # --- History ---------------------------------------------------------------
 HISTFILE=~/.bash_history
 HISTSIZE=50000
@@ -46,28 +52,35 @@ HISTFILESIZE=50000
 HISTCONTROL=ignoreboth:erasedups   # no duplicates; commands starting with a space aren't saved
 HISTTIMEFORMAT='%F %T  '           # save timestamps
 shopt -s histappend cmdhist
-PROMPT_COMMAND+=('history -a; history -n')   # share history between open terminals
 
 # --- General ---------------------------------------------------------------
 shopt -s autocd           # type a folder name to cd into it
 shopt -s checkwinsize globstar
-bind 'set bell-style none'
+bind 'set completion-ignore-case on'        # case-insensitive completion
 
-# Ctrl+Left/Right jump words, Home/End/Delete work as expected
-bind '"\e[1;5D": backward-word'
-bind '"\e[1;5C": forward-word'
-bind '"\e[H": beginning-of-line'
-bind '"\e[F": end-of-line'
-bind '"\e[3~": delete-char'
+if [[ ${BLE_VERSION-} ]]; then
+  bleopt history_share=1                    # share history between open terminals
+  bleopt edit_bell=                         # no beep, no flash
+  # ble.sh has its own Tab menu and already handles Ctrl+Left/Right, Home, End, Delete
+else
+  PROMPT_COMMAND+=('history -a; history -n')   # share history between open terminals
+  bind 'set bell-style none'
 
-# --- Completion (bash-completion is loaded by /etc/bash.bashrc) -------------
-bind 'set completion-ignore-case on'        # case-insensitive
-bind 'set show-all-if-ambiguous on'
-bind 'set menu-complete-display-prefix on'
-bind 'set colored-stats on'
-bind 'set colored-completion-prefix on'
-bind 'TAB: menu-complete'                   # Tab cycles through the matches
-bind '"\e[Z": menu-complete-backward'       # Shift+Tab goes back
+  # Ctrl+Left/Right jump words, Home/End/Delete work as expected
+  bind '"\e[1;5D": backward-word'
+  bind '"\e[1;5C": forward-word'
+  bind '"\e[H": beginning-of-line'
+  bind '"\e[F": end-of-line'
+  bind '"\e[3~": delete-char'
+
+  # Completion (bash-completion is loaded by /etc/bash.bashrc)
+  bind 'set show-all-if-ambiguous on'
+  bind 'set menu-complete-display-prefix on'
+  bind 'set colored-stats on'
+  bind 'set colored-completion-prefix on'
+  bind 'TAB: menu-complete'                 # Tab cycles through the matches
+  bind '"\e[Z": menu-complete-backward'     # Shift+Tab goes back
+fi
 
 # --- Aliases ---------------------------------------------------------------
 alias ls='ls --color=auto'
@@ -121,7 +134,13 @@ au() {
 }
 
 # --- Tools -----------------------------------------------------------------
-eval "$(fzf --bash)"              # Ctrl+R history, Ctrl+T files, Alt+C cd
+# fzf: Ctrl+R history, Ctrl+T files, Alt+C cd (ble.sh ships its own adapters)
+if [[ ${BLE_VERSION-} ]]; then
+  ble-import -d integration/fzf-completion
+  ble-import -d integration/fzf-key-bindings
+else
+  eval "$(fzf --bash)"
+fi
 eval "$(zoxide init bash)"        # z <dir>, zi for interactive pick
 eval "$(starship init bash)"      # prompt
 command -v direnv >/dev/null && eval "$(direnv hook bash)"   # auto-load .envrc
@@ -138,3 +157,6 @@ command -v bat >/dev/null && export FZF_CTRL_T_OPTS="--preview 'bat --color=alwa
 
 # --- GitHub MCP (Claude Code plugin) reuses the gh CLI token ---------------
 export GITHUB_PERSONAL_ACCESS_TOKEN="$(gh auth token 2>/dev/null)"
+
+# --- ble.sh: switch on (keep this last) ---------------------------------------
+[[ ${BLE_VERSION-} ]] && ble-attach
