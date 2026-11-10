@@ -136,10 +136,5 @@ if command -v fd >/dev/null; then
 fi
 command -v bat >/dev/null && export FZF_CTRL_T_OPTS="--preview 'bat --color=always --line-range :200 {}'"
 
-# --- fastfetch on each new Ghostty window, tab or split --------------------
-if [[ $(< /proc/$PPID/comm) == ghostty ]] && command -v fastfetch >/dev/null; then
-  ~/.config/fastfetch/auto.sh   # logo size follows window width
-fi
-
 # --- GitHub MCP (Claude Code plugin) reuses the gh CLI token ---------------
 export GITHUB_PERSONAL_ACCESS_TOKEN="$(gh auth token 2>/dev/null)"
